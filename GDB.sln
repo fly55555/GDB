@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.33529.622
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GDB", "GDB\GDB.csproj", "{99B712C6-0AD3-4ACE-8F56-EABD72E1967B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{99B712C6-0AD3-4ACE-8F56-EABD72E1967B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{99B712C6-0AD3-4ACE-8F56-EABD72E1967B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{99B712C6-0AD3-4ACE-8F56-EABD72E1967B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{99B712C6-0AD3-4ACE-8F56-EABD72E1967B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {60709A85-3489-43D3-87D1-DEB4F1F13B4F}
+	EndGlobalSection
+EndGlobal
