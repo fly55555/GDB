@@ -219,13 +219,6 @@ namespace GDB.Core
             return (result1, result2);
         }
 
-        public bool Step()
-        {
-            IsHalt = false;
-            ExecuteCommand("s:1", true);
-            return true;
-        }
-
         public bool Break()
         {
             ExecuteCommand("\x03", true);
@@ -236,6 +229,13 @@ namespace GDB.Core
         {
             IsHalt = false;
             ExecuteCommand("c");
+            return true;
+        }
+
+        public bool Step()
+        {
+            IsHalt = false;
+            ExecuteCommand("s:1", true);
             return true;
         }
 

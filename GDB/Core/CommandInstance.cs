@@ -37,17 +37,34 @@ namespace GDB.Core
         /// </summary>
         private ConcurrentQueue<GdbMessage> MessageQueue { get; set; }
 
+
+        private bool NoAckMode { get; set; }
+
+
+        public int PacketSize { get; set; }
+
+        private bool SupportedFeatures { get; set; }
+
+        private bool SupportedMultiProcessor { get; set; }
+
+        private bool SupportedVCont { get; set; }
+
+        private bool SupportedQStartNoAckMode { get; set; }
+
         /// <summary>
         /// 
         /// </summary>
         public CommandInstance()
         {
+            PacketSize = 400;
+
             OnMessage += OnReceivedMessage;
             HaltEvent = new AutoResetEvent(false);
             ReceivedEvent = new AutoResetEvent(false);
             MessageQueue = new ConcurrentQueue<GdbMessage>();
 
-            HaltThread = new Thread(()=> {
+            HaltThread = new Thread(() =>
+            {
                 while (HaltEvent.WaitOne())
                 {
                     if (OnHalt != null)
@@ -68,7 +85,7 @@ namespace GDB.Core
             var message = new GdbMessage(o as string);
             MessageQueue.Enqueue(message);
             ReceivedEvent.Set();
-            if (message.Naked.Length > 20 && message.Naked[0] == 'T')
+            if (message.Naked.Length > 10 && message.Naked[0] == 'T')
             {
                 HaltEvent.Set();
             }
@@ -104,8 +121,97 @@ namespace GDB.Core
             return message;
         }
 
+        //var cxx = ExecuteCommand("g");
+        //var xxx = MonitorCommand("info");//info registers -a
 
 
+        private void ParseBasic()
+        {
+            var message = default(GdbMessage);
+            SendToGDB(BuilderProtocol("qSupported"));
+            Thread.Sleep(300);
+            while (MessageQueue.TryDequeue(out message))
+            {
+                if (message.Naked.Length < 4) continue;
+                var subcat = message.Naked.Split(';');
+                foreach (var item in subcat)
+                {
+                    if (item.StartsWith("PacketSize"))
+                    {
+                        PacketSize = int.Parse(item.Substring(11));
+                    }
+
+                    if (item.StartsWith("qXfer:features:read"))
+                    {
+                        SupportedFeatures = true;
+                    }
+
+                    if (item.StartsWith("multiprocess"))
+                    {
+                        SupportedMultiProcessor = true;
+                    }
+
+                    if (item.StartsWith("vContSupported"))
+                    {
+                        SupportedVCont = true;
+                    }
+
+                    if (item.StartsWith("QStartNoAckMode"))
+                    {
+                        SupportedQStartNoAckMode = true;
+                    }
+                }
+            }
+        }
+
+        private void SwitchMode()
+        {
+            if (SupportedQStartNoAckMode)
+            {
+                var message = default(GdbMessage);
+                SendToGDB(BuilderProtocol("QStartNoAckMode"));
+                Thread.Sleep(100);
+                while (MessageQueue.TryDequeue(out message))
+                {
+                    if (message.Naked.Length == 2 && message.Naked == "OK")
+                    {
+                        NoAckMode = true;
+                    }
+                }
+            }
+            else 
+            {
+                NoAckMode = false;
+            }
+        }
+
+
+
+
+        private void ReadTarget()
+        {
+            if (!SupportedFeatures) return;
+            var offset = 0;
+            var xmlstr = "";
+
+            do
+            {
+                var cmdstr = string.Format("qXfer:features:read:target.xml:{0:X3},{1:X3}", offset, PacketSize);
+                var xmlmsg = ExecuteCommand(cmdstr);
+                if (xmlmsg.Naked.Length > 0 && xmlmsg.Naked == "E00") break;
+                xmlstr += xmlmsg.Nakedxml;
+                offset += PacketSize;
+            } while (true);
+
+            xmlstr = "";
+        }
+
+        public void CommandInit()
+        {
+            ParseBasic();
+            SwitchMode();
+            //ReadTarget();
+        }
 
         /// <summary>
         /// Execute command (GDB protocol)
@@ -113,25 +219,73 @@ namespace GDB.Core
         /// <param name="command">指令内容</param>
         /// <param name="halt">指令执行后将会进入暂停状态 否则无限等待!</param>
         /// <returns></returns>
-        public GdbMessage ExecuteCommand(string command, bool halt = false)
+        public GdbMessage ExecuteCommand11(string command, bool halt = false)
         {
             GdbMessage result = default(GdbMessage);
-            if (halt)
+            SendToGDB(BuilderProtocol(command));
+            result = DequeueMessage();
+            //if (halt)
+            //{
+            //    SendToGDB(BuilderProtocol(command));
+            //    do
+            //    {
+            //        result = DequeueMessage();
+            //    } while (!string.IsNullOrEmpty(result.Naked) && result.Naked[0] != 'T');
+            //}
+            //else
+            //{
+            //    SendToGDB(BuilderProtocol(command));
+            //    do
+            //    {
+            //        result = DequeueMessage();
+            //    } while (!string.IsNullOrEmpty(result.Naked) && result.Naked[0] == 'T');
+            //}
+            return result;
+        }
+
+        public GdbMessage ExecuteCommand(string command, bool halt = false)
+        {
+            var result = default(GdbMessage);
+            SendToGDB(BuilderProtocol(command));
+            do
             {
-                SendToGDB(BuilderProtocol(command));
-                do
+                result = DequeueMessage();
+                if (result.Original == "$#00") break;
+                if (!string.IsNullOrEmpty(result.Naked))
                 {
-                    result = DequeueMessage();
-                } while (result.Naked[0] != 'T');
-            }
-            else
-            {
-                SendToGDB(BuilderProtocol(command));
-                do
-                {
-                    result = DequeueMessage();
-                } while (result.Naked[0] == 'T');
-            }
+                    if (halt)
+                    {
+                        if (NoAckMode)
+                        {
+                            if (result.Naked[0] == 'T') break;
+                        }
+                        else
+                        {
+                            if (result.Naked != "+") break;
+                        }
+                    }
+                    else
+                    {
+                        if (NoAckMode)
+                        {
+                            if (result.Naked[0] != 'T') break;
+                        }
+                        else
+                        {
+                            if (result.Naked != "+") break;
+                        }
+                    }
+                }
+            } while (true);
+            return result;
+        }
+
+        public GdbMessage ExecuteCommand2(string command, bool halt = false)
+        {
+            var result = default(GdbMessage);
+            SendToGDB(BuilderProtocol(command));
+            Thread.Sleep(300);
+            result = DequeueMessage();
             return result;
         }
 
