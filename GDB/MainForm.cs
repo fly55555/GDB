@@ -50,13 +50,9 @@ namespace GDB
         private void Form1_Load(object sender, EventArgs e)
         {
             TestSum();
-            //ControlCenter.Instance = new ControlCenter().DebugControlInstances[DebugMachineType.Vmware];
-            //ControlCenter.Instance.OnHaltHandler += TargetOnHalt;
-            //ControlCenter.Instance.LinkStart("LocalHost:8864");
-
-            ControlCenter.Instance = new ControlCenter().DebugControlInstances[DebugMachineType.Qemu];
+            ControlCenter.Instance = new ControlCenter().DebugControlInstances[DebugMachineType.Vmware];
             ControlCenter.Instance.OnHaltHandler += TargetOnHalt;
-            ControlCenter.Instance.LinkStart("8.130.79.89:55593");
+            ControlCenter.Instance.LinkStart("LocalHost:8864");
 
             listView_Disassembly.OnReadEvent += (object o, EventArgs readevent) =>
             {

@@ -16,8 +16,12 @@ namespace GdbProtocolTester
 
         private bool Connected { get; set; }
 
+        private List<string> History { get; set; }
+
         public Form1()
         {
+            //Maybe you need this
+            History = new List<string>();
             InitializeComponent();
         }
 
@@ -121,46 +125,36 @@ namespace GdbProtocolTester
             richTextBox1.Clear();
         }
 
-        private void button4_Click(object sender, EventArgs e)
+        private void Form1_KeyPress(object sender, KeyPressEventArgs e)
         {
-            richTextBox2.Clear();
-        }
-
-        private void button5_Click(object sender, EventArgs e)
-        {
-            if (!Connected)
-            {
-                return;
-            }
-
-            //监控指令
-            if (radioButton1.Checked)
+            if ((Keys)e.KeyChar == Keys.Enter)
             {
                 var command = richTextBox2.Text;
-                var cmdStr = BuilderProtocol($"qRcmd,{command.ToBytes().ToHex()}");
-                netController.SendToGDB(cmdStr);
-            }
+                richTextBox2.Clear();
 
-            //原始指令
-            if (radioButton2.Checked)
-            {
-                var command = richTextBox2.Text;
-                netController.SendToGDB(BuilderProtocol(command));
-            }
+                if (!Connected)
+                {
+                    return;
+                }
 
-            //十六进制数据
-            if (radioButton3.Checked)
-            {
-                var command = richTextBox2.Text;
-                netController.Client.Send(command.ToBin());
-            }
-        }
+                //监控指令
+                if (radioButton1.Checked)
+                {
+                    var cmdStr = BuilderProtocol($"qRcmd,{command.ToBytes().ToHex()}");
+                    netController.SendToGDB(cmdStr);
+                }
 
-        private void Form1_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.KeyCode == Keys.Enter)
-            {
-                button5_Click(sender, e);
+                //原始指令
+                if (radioButton2.Checked)
+                {
+                    netController.SendToGDB(BuilderProtocol(command));
+                }
+
+                //十六进制数据
+                if (radioButton3.Checked)
+                {
+                    netController.Client.Send(command.ToBin());
+                }
             }
         }
     }
