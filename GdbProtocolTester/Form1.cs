@@ -129,7 +129,7 @@ namespace GdbProtocolTester
         {
             if ((Keys)e.KeyChar == Keys.Enter)
             {
-                var command = richTextBox2.Text;
+                var command = richTextBox2.Text.Trim(new char[] { '\r','\n'});
                 richTextBox2.Clear();
 
                 if (!Connected)
