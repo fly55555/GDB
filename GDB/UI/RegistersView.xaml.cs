@@ -36,22 +36,23 @@ namespace GDB.UI
             var newRegisters = new List<RegisterViewModel>();
             foreach (PropertyInfo prop in typeof(CommonRegister_x64).GetProperties())
             {
-                if (prop.PropertyType == typeof(ulong))
+                // 支持所有类型的寄存器，不仅仅是ulong类型
+                var value = prop.GetValue(context);
+                if (value != null)
                 {
                     // 尝试查找现有的寄存器对象
                     var existingReg = currentRegisters.FirstOrDefault(r => r.Name == prop.Name);
-                    var regValue = (ulong)prop.GetValue(context);
                     
                     if (existingReg != null)
                     {
                         // 更新现有对象，这会触发HasChanged属性的计算
-                        existingReg.Value = regValue;
+                        existingReg.Value = Convert.ToUInt64(value);
                         newRegisters.Add(existingReg);
                     }
                     else
                     {
                         // 创建新对象
-                        newRegisters.Add(new RegisterViewModel { Name = prop.Name, Value = regValue });
+                        newRegisters.Add(new RegisterViewModel { Name = prop.Name, Value = Convert.ToUInt64(value) });
                     }
                 }
             }

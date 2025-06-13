@@ -539,13 +539,19 @@ namespace GDB.UI
                 
                 if (memoryData == null || memoryData.Length == 0)
                 {
+                    ShowLoading(false);
                     return;
                 }
 
                 List<CommonInstruction> newInstructions = _disassemblyHandler(memoryData, startAddress);
 
+                // 过滤掉无效的反汇编结果
+                newInstructions = newInstructions.Where(instr => !instr.Describe.Contains("(bad)") && 
+                                                               !instr.Describe.Contains("(disassembly")).ToList();
+
                 if (!newInstructions.Any())
                 {
+                    ShowLoading(false);
                     return;
                 }
 
