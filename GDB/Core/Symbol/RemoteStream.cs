@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace GDB.Core.Symbole
+namespace GDB.Core.Symbol
 {
     public class RemoteStream : Stream
     {
@@ -15,52 +15,68 @@ namespace GDB.Core.Symbole
 
         public override bool CanWrite => false;
 
-        public override long Length => Size;
+        public override long Length => _length;
 
         public override long Position { get; set; }
 
+        private readonly long _startAddress;
+        private readonly long _length;
+        private readonly IDebugControl _debugControl;
 
-        /// <summary>
-        /// 总大小
-        /// </summary>
-        public long Size { get; set; }
-
-        /// <summary>
-        /// 起始地址
-        /// </summary>
-        public long StartPoint { get; set; }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        public IDebugControl DebugControl { get; set; }
-
-
-        public RemoteStream(IDebugControl debugControl, long offset, long size = 0x1000000)
+        public RemoteStream(IDebugControl debugControl, long startAddress, long length = 0x1000000)
         {
-            Size = size;
-            StartPoint = offset;
-            DebugControl = debugControl;
+            _startAddress = startAddress;
+            _length = length;
+            _debugControl = debugControl;
+            Position = 0;
         }
 
         public override long Seek(long offset, SeekOrigin origin)
         {
-            if (origin == SeekOrigin.Begin)
-                Position = offset;
-
-            if (origin == SeekOrigin.Current)
-                Position += offset;
-
-            if (origin == SeekOrigin.End)
-                Position = Length - offset;
-
+            switch (origin)
+            {
+                case SeekOrigin.Begin:
+                    Position = offset;
+                    break;
+                case SeekOrigin.Current:
+                    Position += offset;
+                    break;
+                case SeekOrigin.End:
+                    Position = Length + offset;
+                    break;
+            }
             return Position;
         }
 
         public override int Read(byte[] buffer, int offset, int count)
         {
-            var data = DebugControl.ReadVirtual(offset + Position + StartPoint, count);
-            Array.Copy(data, buffer, data.Length);
+            if (buffer == null)
+                throw new ArgumentNullException(nameof(buffer));
+            if (offset < 0)
+                throw new ArgumentOutOfRangeException(nameof(offset));
+            if (count < 0)
+                throw new ArgumentOutOfRangeException(nameof(count));
+            if (buffer.Length - offset < count)
+                throw new ArgumentException("Invalid offset and length.");
+
+            long currentAddress = _startAddress + Position;
+            int bytesToRead = (int)Math.Min(count, _length - Position);
+
+            if (bytesToRead <= 0)
+            {
+                return 0; // End of stream
+            }
+            
+            // This is a sync-over-async operation. It blocks the current thread.
+            // This is acceptable if symbol loading is on a background thread.
+            byte[] data = _debugControl.ReadVirtual(currentAddress, bytesToRead).Result;
+            
+            if (data == null || data.Length == 0)
+            {
+                return 0; // GDB failed to read, treat as end of stream
+            }
+
+            Array.Copy(data, 0, buffer, offset, data.Length);
             Position += data.Length;
             return data.Length;
         }
@@ -73,7 +89,7 @@ namespace GDB.Core.Symbole
         /// <param name="count"></param>
         public override void Write(byte[] buffer, int offset, int count)
         {
-            return;
+            throw new NotSupportedException("This stream does not support writing.");
         }
 
         /// <summary>
@@ -82,7 +98,7 @@ namespace GDB.Core.Symbole
         /// <param name="value"></param>
         public override void SetLength(long value)
         {
-            return;
+            throw new NotSupportedException("This stream does not support setting length.");
         }
 
         /// <summary>
@@ -90,7 +106,7 @@ namespace GDB.Core.Symbole
         /// </summary>
         public override void Flush()
         {
-            return;
+            // No-op
         }
     }
 }

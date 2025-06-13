@@ -1,4 +1,5 @@
 ﻿using GDB.Core.Disassembly;
+using GDB.Core.Protocol;
 using GDB.Core.Register;
 using System;
 using System.Collections.Generic;
@@ -12,81 +13,77 @@ namespace GDB.Core
     /// <summary>
     /// QEMU调试控制器
     /// </summary>
-    public class DebugControlQemu : CommandInstance, IDebugControl
+    public class DebugControlQemu : IDebugControl
     {
         public bool IsHalt { get; set; }
 
         public event EventHandler OnHaltHandler;
+        public GdbClient Client { get; }
 
-        public DebugControlQemu()
+        public DebugControlQemu(GdbClient client)
         {
-            OnHalt += (object sender, EventArgs e) =>
-            {
-                IsHalt = true;
-
-                if (OnHaltHandler != null)
-                    OnHaltHandler.Invoke(sender, e);
-            };
+            Client = client;
         }
 
-        public bool LinkStart(string connectionstring)
+        public void ProcessStopReply(GdbPacket packet)
         {
-            if (string.IsNullOrEmpty(connectionstring))
+            IsHalt = true;
+            OnHaltHandler?.Invoke(this, EventArgs.Empty);
+        }
+
+        public async Task<string> Execute(string command)
+        {
+            if (IsHalt == false)
+                return "Machine is running. \r\n Can not execute string command.";
+
+            var response = await Client.SendCommandAndReceiveResponseAsync(command);
+            return response.Data;
+        }
+
+        public async Task<bool> Break()
+        {
+            await Client.SendPacketAsync(new GdbPacket("\x03"));
+            return true;
+        }
+
+        public async Task<bool> BreakPointAdd(int type, long addr, int size)
+        {
+            if (IsHalt == false)
                 return false;
 
-            var spiltstr = connectionstring.Split(':');
-            if (spiltstr.Length != 2)
+            var command = $"Z{type},{addr:x},{size:x}";
+            var response = await Client.SendCommandAndReceiveResponseAsync(command);
+            return response.Data == "OK";
+        }
+
+        public async Task<bool> BreakPointDel(int type, long addr, int size)
+        {
+            if (IsHalt == false)
                 return false;
 
-            Connect(spiltstr[0], int.Parse(spiltstr[1]));
-            CommandInit();
-            ExecuteCommand("?", true);
-            return true;
+            var command = $"z{type},{addr:x},{size:x}";
+            var response = await Client.SendCommandAndReceiveResponseAsync(command);
+            return response.Data == "OK";
         }
 
-        public string Execute(string command, bool monitor = false)
-        {
-            return "";
-        }
-
-        public bool Break()
-        {
-            ExecuteCommand("\x03");
-            Thread.Sleep(100);
-            ExecuteCommand("?", true);
-            return true;
-        }
-
-        public bool BreakPointAdd(int type, long addr, int size)
-        {
-            return true;
-        }
-
-        public bool BreakPointDel(int type, long addr, int size)
-        {
-            return true;
-        }
-
-        public bool Continue()
+        public async Task<bool> Continue()
         {
             IsHalt = false;
-            ExecuteCommand2("vCont;c");
+            await Client.SendCommandAndReceiveResponseAsync("vCont;c");
             return true;
         }
 
-        public bool GetContext(out CommonRegister_x64 context)
+        public async Task<CommonRegister_x64> GetContext()
         {
-            context = new CommonRegister_x64();
-            var msg = ExecuteCommand("g");
-            var data = msg.Naked.ToBin();
+            var msg = await Client.SendCommandAndReceiveResponseAsync("g");
+            var data = msg.Data.ToBin();
             if (data.Length == 0)
             {
-                return false;
+                return null;
             }
             else
             {
-                //var infos = MonitorCommand("info registers");
-
+                var context = new CommonRegister_x64();
                 var core_register = data.ToStruct<Register_Vmware_x64.Context>();
                 context.RAX = core_register.rax;
                 context.RBX = core_register.rbx;
@@ -114,63 +111,51 @@ namespace GDB.Core
                 context.ES = (ushort)core_register.es;
                 context.FS = (ushort)core_register.fs;
                 context.GS = (ushort)core_register.gs;
+                return context;
             }
-            return true;
         }
 
-        public byte[] ReadVirtual(long addr, int size)
+        public async Task<byte[]> ReadVirtual(long addr, int size)
         {
-            if (size <= 0)
-                throw new NotImplementedException();
-
-            if (size <= PacketSize)
+            var command = $"m{addr:x},{size:x}";
+            var response = await Client.SendCommandAndReceiveResponseAsync(command);
+            if (response.Data.StartsWith("E"))
             {
-                var response = ExecuteCommand(string.Format("m{0:X16},{1:X3}", addr, size));
-                return response.Naked.ToBin();
+                return new byte[0];
             }
-            else
-            {
-                var current = addr;
-                var residue = size;
-                var result = new byte[size];
-                do
-                {
-                    if (residue > PacketSize)
-                    {
-                        var response = ExecuteCommand(string.Format("m{0:X16},{1:X3}", current, PacketSize));
-                        var data = response.Naked.ToBin();
-                        Array.Copy(data, 0, result, size - residue, PacketSize);
-                    }
-                    else
-                    {
-                        var response = ExecuteCommand(string.Format("m{0:X16},{1:X3}", current, residue));
-                        var data = response.Naked.ToBin();
-                        Array.Copy(data, 0, result, size - residue, residue);
-                        break;
-                    }
-                    residue -= PacketSize;
-                } while (true);
-                return result;
-            }
+            return response.Data.ToBin();
         }
 
-        public bool Step()
+        public async Task<bool> Step()
         {
             IsHalt = false;
-            ExecuteCommand("vCont;s", true);
+            await Client.SendCommandAndReceiveResponseAsync("vCont;s");
             return true;
         }
 
-        public bool StepOver()
+        public async Task<bool> StepOver()
         {
             IsHalt = false;
-            ExecuteCommand("vCont;s", true);
+            await Client.SendCommandAndReceiveResponseAsync("vCont;s");
             return true;
         }
 
-        public List<CommonInstruction> Disassembly(long addr, int size)
+        public async Task<List<CommonInstruction>> Disassembly(long addr, int size)
         {
-            throw new NotImplementedException();
+            var code = await ReadVirtual(addr, size);
+            if (code == null || code.Length == 0)
+            {
+                return new List<CommonInstruction>();
+            }
+            return CommonDisassembly_x64.GetResult(code, addr);
+        }
+
+        public List<CommonInstruction> DisassemblyBytes(byte[] bytes, ulong startAddress)
+        {
+            if (bytes == null || bytes.Length == 0)
+                return new List<CommonInstruction>();
+                
+            return CommonDisassembly_x64.GetResult(bytes, (long)startAddress);
         }
     }
 }

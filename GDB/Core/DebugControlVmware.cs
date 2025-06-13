@@ -1,5 +1,7 @@
 ﻿using GDB.Core.Disassembly;
+using GDB.Core.Protocol;
 using GDB.Core.Register;
+using GDB.Core.Symbol;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -12,117 +14,109 @@ using System.Xml.Serialization;
 
 namespace GDB.Core
 {
-    public class DebugControlVmware : CommandInstance, IDebugControl
+    public class DebugControlVmware : IDebugControl
     {
         public bool IsHalt { get; set; }
 
         public ulong KernBase { get; set; }
 
+        public GdbClient Client { get; }
 
         public event EventHandler OnHaltHandler;
 
-        public DebugControlVmware()
+        public DebugControlVmware(GdbClient client)
         {
-            OnHalt += (object sender, EventArgs e) =>
+            Client = client;
+        }
+
+        public void ProcessStopReply(GdbPacket packet)
+        {
+            IsHalt = true;
+
+            // Offload the kernel base discovery to a background thread
+            // to avoid deadlocking the GDB receive loop.
+            if (KernBase == 0)
             {
-                IsHalt = true;
-
-                if (KernBase == 0)
+                _ = Task.Run(async () =>
                 {
-                    KernBase = 1;
-                    if (GetContext(out CommonRegister_x64 context))
+                    try
                     {
-                        if (context.RIP < 0xFFFF800000000000)
+                        KernBase = 1; // Mark as "in progress"
+                        var context = await GetContext();
+                        if (context != null)
                         {
-                            KernBase = 0;
-                            Continue();
-                            Break();
-                        }
-                        else
-                        {
-                            var data = ReadVirtual((long)context.IDT, 16);
-                            ulong kiDivide = 0;
-                            kiDivide += ((ulong)BitConverter.ToUInt16(data, 10) << 48);
-                            kiDivide += ((ulong)BitConverter.ToUInt16(data, 8) << 32);
-                            kiDivide += ((ulong)BitConverter.ToUInt16(data, 6) << 16);
-                            kiDivide += ((ulong)BitConverter.ToUInt16(data, 0) << 0);
-                            ulong searchBased = kiDivide & 0xFFFFFFFFFFFF0000;
-                            for (ulong i = searchBased; i > 0xFFFFF80000000000; i -= 0x1000)
+                            if (context.RIP < 0xFFFF800000000000)
                             {
-                                using (var stream = new Symbole.RemoteStream(this, (long)i))
+                                KernBase = 0; // Reset for next attempt
+                                await Continue();
+                                await Break();
+                            }
+                            else
+                            {
+                                var data = await ReadVirtual((long)context.IDT, 16);
+                                if (data != null && data.Length >= 16)
                                 {
-                                    var error = PE.PeHeader.TryReadFrom(stream, out PE.PeHeader header);
-                                    if (error != PE.ReaderError.NoError)
-                                        continue;
-
-                                    var rsdsi = header.GetRSDSI(stream);
-                                    if (rsdsi == null)
-                                        continue;
-
-                                    if (rsdsi.PDB == "ntoskrnl.pdb" || rsdsi.PDB == "ntkrnlpa.pdb" || rsdsi.PDB == "ntkrnlmp.pdb" || rsdsi.PDB == "ntkrpamp.pdb")
+                                    ulong kiDivide = 0;
+                                    kiDivide += ((ulong)BitConverter.ToUInt16(data, 10) << 48);
+                                    kiDivide += ((ulong)BitConverter.ToUInt16(data, 8) << 32);
+                                    kiDivide += ((ulong)BitConverter.ToUInt16(data, 6) << 16);
+                                    kiDivide += ((ulong)BitConverter.ToUInt16(data, 0) << 0);
+                                    ulong searchBased = kiDivide & 0xFFFFFFFFFFFF0000;
+                                    for (ulong i = searchBased; i > 0xFFFFF80000000000; i -= 0x1000)
                                     {
-                                        KernBase = i;
-                                        break;
+                                        using (var stream = new RemoteStream(this, (long)i))
+                                        {
+                                            var error = PE.PeHeader.TryReadFrom(stream, out PE.PeHeader header);
+                                            if (error != PE.ReaderError.NoError)
+                                                continue;
+
+                                            var rsdsi = header.GetRSDSI(stream);
+                                            if (rsdsi == null)
+                                                continue;
+
+                                            if (rsdsi.PDB == "ntoskrnl.pdb" || rsdsi.PDB == "ntkrnlpa.pdb" || rsdsi.PDB == "ntkrnlmp.pdb" || rsdsi.PDB == "ntkrpamp.pdb")
+                                            {
+                                                KernBase = i;
+                                                break;
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
+                    catch
+                    {
+                        // If anything goes wrong, reset the discovery process.
+                        KernBase = 0;
+                    }
+                });
+            }
 
-                if (OnHaltHandler != null)
-                    OnHaltHandler.Invoke(sender, e);
-            };
+            // Notify the UI immediately that a halt occurred.
+            OnHaltHandler?.Invoke(this, EventArgs.Empty);
         }
 
-        public bool LinkStart(string connectionstring)
-        {
-            if (string.IsNullOrEmpty(connectionstring))
-                return false;
-
-            var spiltstr = connectionstring.Split(':');
-            if (spiltstr.Length != 2)
-                return false;
-
-            Connect(spiltstr[0], int.Parse(spiltstr[1]));
-            ExecuteCommand("?", true);
-            return true;
-        }
-
-        public string Execute(string command, bool monitor = false)
+        public async Task<string> Execute(string command)
         {
             if (IsHalt == false)
                 return "Machine is running. \r\n Can not execute string command.";
 
-            var result = string.Empty;
-            if (monitor)
-            {
-                result = MonitorCommand(command).Replace("\n", "\r\n");
-            }
-            else
-            {
-                if (command == "c")
-                    IsHalt = false;
-
-                if (command == "?" || command == "\x03" || command.StartsWith("s:"))
-                    result = ExecuteCommand(command, true).Original;
-                else
-                    result = ExecuteCommand(command).Original;
-            }
-            return result;
+            var response = await Client.SendCommandAndReceiveResponseAsync(command);
+            return response.Data;
         }
 
-        public bool GetContext(out CommonRegister_x64 context)
+        public async Task<CommonRegister_x64> GetContext()
         {
-            context = new CommonRegister_x64();
-            var msg = ExecuteCommand("g");
-            var data = msg.Naked.ToBin();
+            var msg = await Client.SendCommandAndReceiveResponseAsync("g");
+            var data = msg.Data.ToBin();
             if (data.Length == 0)
             {
-                return false;
+                return null;
             }
             else
             {
+                var context = new CommonRegister_x64();
                 var core_register = data.ToStruct<Register_Vmware_x64.Context>();
                 context.RAX = core_register.rax;
                 context.RBX = core_register.rbx;
@@ -153,201 +147,189 @@ namespace GDB.Core
 
                 //DR0-DR7 Not Support!
 
-                context.CR0 = GetSpecialRegister(0).Item1;
-                context.CR2 = GetSpecialRegister(1).Item1;
-                context.CR3 = GetSpecialRegister(2).Item1;
-                context.CR4 = GetSpecialRegister(3).Item1;
-                context.CR8 = GetSpecialRegister(4).Item1;
+                context.CR0 = (await GetSpecialRegister(0)).Item1;
+                context.CR2 = (await GetSpecialRegister(1)).Item1;
+                context.CR3 = (await GetSpecialRegister(2)).Item1;
+                context.CR4 = (await GetSpecialRegister(3)).Item1;
+                context.CR8 = (await GetSpecialRegister(4)).Item1;
 
-                var idtr = GetSpecialRegister(5);
-                var gdtr = GetSpecialRegister(6);
+                var idtr = await GetSpecialRegister(5);
+                var gdtr = await GetSpecialRegister(6);
                 context.IDT = idtr.Item1;
                 context.IDTL = idtr.Item2;
                 context.GDT = gdtr.Item1;
                 context.GDTL = gdtr.Item2;
-                return true;
+                return context;
             }
         }
 
-        public (ulong, ushort) GetSpecialRegister(int index)
+        public async Task<(ulong, ushort)> GetSpecialRegister(int index)
         {
             var result1 = default(ulong);
             var result2 = default(ushort);
-            var response = string.Empty;
-            if (index == 0)
-                response = MonitorCommand("r cr0");
-            if (index == 1)
-                response = MonitorCommand("r cr2");
-            if (index == 2)
-                response = MonitorCommand("r cr3");
-            if (index == 3)
-                response = MonitorCommand("r cr4");
-            if (index == 4)
-                response = MonitorCommand("r cr8");
-            if (index == 5)
-                response = MonitorCommand("r idtr");
-            if (index == 6)
-                response = MonitorCommand("r gdtr");
-            response = response.TrimEnd('\n');
 
-            if (!string.IsNullOrEmpty(response) && response.Length > 4)
+            // 准备命令、期望的响应前缀，并区分寄存器类型
+            string command;
+            string expectedPrefix;
+            bool isMultiValue;
+
+            switch (index)
             {
-                var spiltstr = response.Split('=');
-                if (spiltstr.Length == 2)
+                case 0: command = "r cr0"; expectedPrefix = "cr0"; isMultiValue = false; break;
+                case 1: command = "r cr2"; expectedPrefix = "cr2"; isMultiValue = false; break;
+                case 2: command = "r cr3"; expectedPrefix = "cr3"; isMultiValue = false; break;
+                case 3: command = "r cr4"; expectedPrefix = "cr4"; isMultiValue = false; break;
+                case 4: command = "r cr8"; expectedPrefix = "cr8"; isMultiValue = false; break;
+                case 5: command = "r idtr"; expectedPrefix = "idtr"; isMultiValue = true; break;
+                case 6: command = "r gdtr"; expectedPrefix = "gdtr"; isMultiValue = true; break;
+                default:
+                    System.Diagnostics.Debug.WriteLine($"[ERROR] GetSpecialRegister called with invalid index: {index}");
+                    return (0, 0);
+            }
+
+            try
+            {
+                // 使用项目中现有的扩展方法将命令转换为十六进制格式
+                string hexCommand = command.ToBytes().ToHex();
+                
+                // 发送命令并获取响应
+                var responsePacket = await Client.SendCommandAndReceiveResponseAsync($"qRcmd,{hexCommand}");
+                if (responsePacket == null)
                 {
-                    foreach (var item in spiltstr[1].ToBin())
+                    System.Diagnostics.Debug.WriteLine($"[ERROR] GetSpecialRegister for '{command}' received null response.");
+                    return (result1, result2);
+                }
+                var response = responsePacket.Data;
+                
+                // 处理GDB协议中"O"开头的响应（十六进制编码的ASCII文本）
+                string decodedResponse;
+                if (response.StartsWith("O"))
+                {
+                    var decodedText = new StringBuilder();
+                    int currentIndex = 0;
+                    while (currentIndex < response.Length)
                     {
-                        result1 = result1 << 8;
-                        result1 += item;
+                        if (response[currentIndex] != 'O') { currentIndex++; continue; }
+                        int nextO = response.IndexOf('O', currentIndex + 1);
+                        if (nextO == -1) nextO = response.Length;
+                        string hexPart = response.Substring(currentIndex + 1, nextO - currentIndex - 1);
+                        if (!string.IsNullOrEmpty(hexPart))
+                        {
+                            decodedText.Append(hexPart.ToBin().ToTextA());
+                        }
+                        currentIndex = nextO;
+                    }
+                    decodedResponse = decodedText.ToString();
+                }
+                else
+                {
+                    decodedResponse = response;
+                }
+                
+                // --- 核心修复：验证并进行健壮性解析 ---
+                string trimmedResponse = decodedResponse.Trim();
+                
+                // 1. 验证响应是否与请求匹配
+                if (!trimmedResponse.StartsWith(expectedPrefix))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[ERROR] GetSpecialRegister mismatch for command '{command}'. Expected prefix '{expectedPrefix}' but got response: '{trimmedResponse}'");
+                    return (result1, result2); // 关键：不匹配则直接返回，不再错误解析
+                }
+
+                // 2. 根据寄存器类型使用不同的健壮解析逻辑
+                if (isMultiValue)
+                {
+                    // 解析 "idtr base=0x... limit=0x..." 格式
+                    var parts = trimmedResponse.Split(new[] { ' ', '=' }, StringSplitOptions.RemoveEmptyEntries);
+                    // 期望格式: [ "idtr", "base", "0x...", "limit", "0x..." ]
+                    if (parts.Length >= 5 && parts[1] == "base" && parts[3] == "limit")
+                    {
+                        foreach (var item in parts[2].ToBin()) { result1 = (result1 << 8) + item; }
+                        foreach (var item in parts[4].ToBin()) { result2 = (ushort)((result2 << 8) + item); }
                     }
                 }
-                if (spiltstr.Length == 3)
+                else
                 {
-                    var spiltstr2 = spiltstr[1].Split(' ');
-                    foreach (var item in spiltstr2[0].ToBin())
+                    // 解析 "cr0=0x..." 格式
+                    var parts = trimmedResponse.Split('=');
+                    if (parts.Length >= 2)
                     {
-                        result1 = result1 << 8;
-                        result1 += item;
-                    }
-                    foreach (var item in spiltstr[2].ToBin())
-                    {
-                        result2 = (ushort)(result2 << 8);
-                        result2 += item;
+                        foreach (var item in parts[1].ToBin()) { result1 = (result1 << 8) + item; }
                     }
                 }
             }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ERROR] GetSpecialRegister for '{command}' threw an exception: {ex.Message}");
+            }
+            
             return (result1, result2);
         }
 
-        public bool Break()
+        public async Task<bool> Break()
         {
-            ExecuteCommand("\x03", true);
+            await Client.SendPacketAsync(new GdbPacket("\x03"));
             return true;
         }
 
-        public bool Continue()
-        {
-            IsHalt = false;
-            ExecuteCommand("c");
-            return true;
-        }
-
-        public bool Step()
+        public async Task<bool> Continue()
         {
             IsHalt = false;
-            ExecuteCommand("s:1", true);
+            await Client.SendCommandAndReceiveResponseAsync("c");
             return true;
         }
 
-        public bool StepOver()
+        public async Task<bool> Step()
         {
+            IsHalt = false;
+            await Client.SendCommandAndReceiveResponseAsync("s");
             return true;
         }
 
-        public bool BreakPointAdd(int type, long addr, int size)
+        public Task<bool> StepOver()
+        {
+            return Task.FromResult(true);
+        }
+
+        public async Task<bool> BreakPointAdd(int type, long addr, int size)
         {
             if (IsHalt == false)
                 return false;
 
-            //Execute
-            if (type == 0)
-            {
-                var result = ExecuteCommand(string.Format("Z0,{0:X16},{1:X1}", addr, size));
-                if (result.Naked.StartsWith("OK"))
-                    return true;
-            }
-
-            //Write
-            if (type == 1)
-            {
-                var result = ExecuteCommand(string.Format("Z2,{0:X16},{1:X1}", addr, size));
-                if (result.Naked.StartsWith("OK"))
-                    return true;
-            }
-
-            //Access
-            if (type == 2)
-            {
-                var result = ExecuteCommand(string.Format("Z4,{0:X16},{1:X1}", addr, size));
-                if (result.Naked.StartsWith("OK"))
-                    return true;
-            }
-
-            return false;
+            var command = $"Z{type},{addr:x},{size:x}";
+            var response = await Client.SendCommandAndReceiveResponseAsync(command);
+            return response.Data == "OK";
         }
 
-        public bool BreakPointDel(int type, long addr, int size)
+        public async Task<bool> BreakPointDel(int type, long addr, int size)
         {
             if (IsHalt == false)
                 return false;
 
-            //Execute
-            if (type == 0)
-            {
-                var result = ExecuteCommand(string.Format("z0,{0:X16},{1:X1}", addr, size));
-                if (result.Naked.StartsWith("OK"))
-                    return true;
-            }
-
-            //Write
-            if (type == 1)
-            {
-                var result = ExecuteCommand(string.Format("z2,{0:X16},{1:X1}", addr, size));
-                if (result.Naked.StartsWith("OK"))
-                    return true;
-            }
-
-            //Access
-            if (type == 2)
-            {
-                var result = ExecuteCommand(string.Format("z4,{0:X16},{1:X1}", addr, size));
-                if (result.Naked.StartsWith("OK"))
-                    return true;
-            }
-
-            return false;
+            var command = $"z{type},{addr:x},{size:x}";
+            var response = await Client.SendCommandAndReceiveResponseAsync(command);
+            return response.Data == "OK";
         }
 
-        public byte[] ReadVirtual(long ptr, int size)
+        public async Task<byte[]> ReadVirtual(long ptr, int size)
         {
-            if (size <= 0)
-                throw new NotImplementedException();
-
-            if (size <= 500)
-            {
-                var response = ExecuteCommand(string.Format("m{0:X16},{1:X3}", ptr, size));
-                return response.Naked.ToBin();
-            }
-            else
-            {
-                var current = ptr;
-                var residue = size;
-                var result = new byte[size];
-                do
-                {
-                    if (residue > 500)
-                    {
-                        var response = ExecuteCommand(string.Format("m{0:X16},{1:X3}", current, 500));
-                        var data = response.Naked.ToBin();
-                        Array.Copy(data, 0, result, size - residue, 500);
-                    }
-                    else
-                    {
-                        var response = ExecuteCommand(string.Format("m{0:X16},{1:X3}", current, residue));
-                        var data = response.Naked.ToBin();
-                        Array.Copy(data, 0, result, size - residue, residue);
-                        break;
-                    }
-                    residue -= 500;
-                } while (true);
-                return result;
-            }
+            var command = $"m{ptr:x},{size:x}";
+            var response = await Client.SendCommandAndReceiveResponseAsync(command);
+            return response.Data.ToBin();
         }
 
-        public List<CommonInstruction> Disassembly(long addr, int size)
+        public async Task<List<CommonInstruction>> Disassembly(long addr, int size)
         {
-            var binarycode = ControlCenter.Instance.ReadVirtual(addr, size);
-            return CommonDisassembly_x64.GetResult(binarycode, addr);
+            var code = await ReadVirtual(addr, size);
+            return CommonDisassembly_x64.GetResult(code, addr);
+        }
+
+        public List<CommonInstruction> DisassemblyBytes(byte[] bytes, ulong startAddress)
+        {
+            if (bytes == null || bytes.Length == 0)
+                return new List<CommonInstruction>();
+                
+            return CommonDisassembly_x64.GetResult(bytes, (long)startAddress);
         }
     }
 }

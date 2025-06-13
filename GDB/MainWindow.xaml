@@ -1,0 +1,94 @@
+<Window x:Class="GDB.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:GDB"
+        xmlns:ui="clr-namespace:GDB.UI"
+        mc:Ignorable="d"
+        Title="WPF GDB Debugger" Height="800" Width="1200"
+        WindowStartupLocation="CenterScreen">
+    <DockPanel>
+        <!-- Top Menu -->
+        <Menu DockPanel.Dock="Top">
+            <MenuItem Header="_File">
+                <MenuItem Header="_Connect" Name="ConnectMenuItem" Click="ConnectMenuItem_Click"/>
+                <Separator />
+                <MenuItem Header="E_xit" Name="ExitMenuItem" Click="ExitMenuItem_Click"/>
+            </MenuItem>
+            <MenuItem Header="_Debug">
+                <MenuItem Header="_Run" Name="RunMenuItem" Click="RunMenuItem_Click" InputGestureText="F9"/>
+                <MenuItem Header="_Break" Name="BreakMenuItem" Click="BreakMenuItem_Click"/>
+                <MenuItem Header="_Step Into" Name="StepIntoMenuItem" Click="StepIntoMenuItem_Click" InputGestureText="F7"/>
+            </MenuItem>
+        </Menu>
+
+        <!-- Top Toolbar -->
+        <ToolBar DockPanel.Dock="Top">
+            <Button Content="Connect" Name="ConnectButton" Click="ConnectMenuItem_Click"/>
+            <Separator/>
+            <Button Content="Run" Name="RunButton" Click="RunMenuItem_Click"/>
+            <Button Content="Break" Name="BreakButton" Click="BreakMenuItem_Click"/>
+            <Button Content="Step" Name="StepButton" Click="StepIntoMenuItem_Click"/>
+            <Separator/>
+            <TextBlock Text=" Go to Address: " VerticalAlignment="Center"/>
+            <TextBox Name="AddressTextBox" Width="150" VerticalContentAlignment="Center"/>
+            <Button Content="Go" Name="GoToAddressButton" Click="GoToAddressButton_Click"/>
+        </ToolBar>
+
+        <!-- Bottom Status Bar -->
+        <StatusBar DockPanel.Dock="Bottom">
+            <StatusBarItem>
+                <TextBlock Name="StatusTextBlock" Text="Disconnected"/>
+            </StatusBarItem>
+        </StatusBar>
+        
+        <!-- Main Content Area -->
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="300" MinWidth="150"/>
+                <ColumnDefinition Width="5"/>
+                <ColumnDefinition Width="*" MinWidth="300"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Left Panel: Registers -->
+            <ui:RegistersView x:Name="RegistersView" Grid.Column="0" />
+            
+            <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Stretch" />
+
+            <!-- Right Panel: Disassembly and Tabs -->
+            <DockPanel Grid.Column="2">
+                <!-- Disassembly View -->
+                <ui:InfiniteListView x:Name="DisassemblyView" DockPanel.Dock="Top" Height="400" />
+
+                <!-- Other Views in Tabs -->
+                <TabControl>
+                    <TabItem Header="Command">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="100"/>
+                            </Grid.RowDefinitions>
+                            <TextBox Grid.Row="0" Name="CommandOutputTextBox" IsReadOnly="true" VerticalScrollBarVisibility="Auto"/>
+                            <GridSplitter Grid.Row="1" Height="5" HorizontalAlignment="Stretch"/>
+                            <TextBox Grid.Row="2" Name="CommandInputTextBox" KeyDown="CommandInputTextBox_KeyDown"/>
+                        </Grid>
+                    </TabItem>
+                    <TabItem Header="Breakpoints">
+                        <ListView Name="BreakpointsListView">
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Header="Address" Width="150" DisplayMemberBinding="{Binding Address, StringFormat='X16'}"/>
+                                    <GridViewColumn Header="Type" Width="80" DisplayMemberBinding="{Binding Type}"/>
+                                    <GridViewColumn Header="Enabled" Width="80" DisplayMemberBinding="{Binding IsEnabled}"/>
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+                    </TabItem>
+                    <!-- More tabs like Memory, Call Stack can be added here -->
+                </TabControl>
+            </DockPanel>
+        </Grid>
+    </DockPanel>
+</Window> 
