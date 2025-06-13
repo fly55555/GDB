@@ -97,8 +97,22 @@ namespace GDB.Core
         public async Task<bool> Step()
         {
             if (State != DebuggerState.Halted) return false;
+            
+            // 设置状态为Busy
             SetState(DebuggerState.Busy);
-            return await _activeDebugger.Step();
+            
+            try
+            {
+                // 执行单步命令
+                return await _activeDebugger.Step();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Step failed: {ex.Message}");
+                // 如果发生异常，恢复状态为Halted
+                SetState(DebuggerState.Halted);
+                return false;
+            }
         }
 
         public async Task<bool> Break()
@@ -111,8 +125,22 @@ namespace GDB.Core
         public async Task<bool> Continue()
         {
             if (State != DebuggerState.Halted) return false;
+            
+            // 设置状态为Busy
             SetState(DebuggerState.Busy);
-            return await _activeDebugger.Continue();
+            
+            try
+            {
+                // 执行继续命令
+                return await _activeDebugger.Continue();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Continue failed: {ex.Message}");
+                // 如果发生异常，恢复状态为Halted
+                SetState(DebuggerState.Halted);
+                return false;
+            }
         }
 
         public Task<bool> StepOver() => Step();

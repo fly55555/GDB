@@ -11,6 +11,9 @@ namespace GDB
     public partial class MainWindow : Window
     {
         private readonly ControlCenter _controlCenter;
+        private bool _isProcessingKeyDown = false;
+        private DateTime _lastKeyDownTime = DateTime.MinValue;
+        private const int KEY_DEBOUNCE_MS = 50; // 按键防抖动间隔（毫秒）
 
         public MainWindow()
         {
@@ -139,19 +142,37 @@ namespace GDB
             }
         }
 
-        private void MainWindow_KeyDown(object sender, KeyEventArgs e)
+        private async void MainWindow_KeyDown(object sender, KeyEventArgs e)
         {
-            // F7键触发Step
-            if (e.Key == Key.F7 && StepButton.IsEnabled)
+            // 如果正在处理按键事件或者距离上次按键时间太短，则忽略此次按键
+            if (_isProcessingKeyDown || (DateTime.Now - _lastKeyDownTime).TotalMilliseconds < KEY_DEBOUNCE_MS)
             {
-                StepIntoMenuItem_Click(sender, e);
                 e.Handled = true;
+                return;
             }
-            // F9键触发Run
-            else if (e.Key == Key.F9 && RunButton.IsEnabled)
+
+            try
             {
-                RunMenuItem_Click(sender, e);
-                e.Handled = true;
+                // F7键触发Step
+                if (e.Key == Key.F7 && StepButton.IsEnabled)
+                {
+                    _isProcessingKeyDown = true;
+                    _lastKeyDownTime = DateTime.Now;
+                    e.Handled = true;
+                    await _controlCenter.Step();
+                }
+                // F9键触发Run
+                else if (e.Key == Key.F9 && RunButton.IsEnabled)
+                {
+                    _isProcessingKeyDown = true;
+                    _lastKeyDownTime = DateTime.Now;
+                    e.Handled = true;
+                    await _controlCenter.Continue();
+                }
+            }
+            finally
+            {
+                _isProcessingKeyDown = false;
             }
         }
     }

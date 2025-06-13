@@ -195,14 +195,16 @@ namespace GDB.Core.Protocol
                     }
                     _processingBuffer.Remove(0, 1);
                     
-                    // 检查是否有待处理的继续执行命令(c)
-                    foreach (var kvp in _pendingCommands)
+                    // 检查是否有待处理的继续执行或单步命令
+                    // 使用ToList()创建一个副本，避免在迭代过程中修改集合
+                    var pendingCommands = _pendingCommands.ToList();
+                    foreach (var kvp in pendingCommands)
                     {
                         string commandId = kvp.Key;
                         string command = commandId.Substring(commandId.IndexOf(':') + 1);
                         
-                        // 如果是继续执行命令，则完成响应
-                        if (command == "c" || command == "s")
+                        // 如果是继续执行命令或单步命令，则完成响应
+                        if (command == "c" || command == "s" || command == "vCont;c" || command == "vCont;s")
                         {
                             TaskCompletionSource<GdbPacket> tcs;
                             if (_pendingCommands.TryRemove(commandId, out tcs))
@@ -627,11 +629,14 @@ namespace GDB.Core.Protocol
                     var packet = new GdbPacket(command);
                     await SendPacketAsync(packet, cancellationToken);
                 
+                    // 对于单步命令和继续执行命令，使用更短的超时时间
+                    int timeoutSeconds = (command == "s" || command == "c" || command == "vCont;s" || command == "vCont;c") ? 3 : 10;
+                
                     // 设置超时
-                    using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
+                    using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds)))
                     using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token))
                     {
-                        LogMessage($"等待命令 ID {commandId} 的响应，超时时间: 10秒");
+                        LogMessage($"等待命令 ID {commandId} 的响应，超时时间: {timeoutSeconds}秒");
                         var completedTask = await Task.WhenAny(responseTcs.Task, Task.Delay(Timeout.Infinite, linkedCts.Token));
                     
                         if (completedTask == responseTcs.Task)
