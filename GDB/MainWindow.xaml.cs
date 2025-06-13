@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Input;
+using System.Threading.Tasks;
 
 namespace GDB
 {
@@ -69,6 +70,9 @@ namespace GDB
             
             BreakButton.IsEnabled = isRunning && !isBusy;
             BreakMenuItem.IsEnabled = isRunning && !isBusy;
+            
+            LoadSymbolsButton.IsEnabled = isHalted && !isBusy;
+            LoadSymbolsMenuItem.IsEnabled = isHalted && !isBusy;
 
             if (isHalted)
             {
@@ -173,6 +177,86 @@ namespace GDB
             finally
             {
                 _isProcessingKeyDown = false;
+            }
+        }
+
+        private async void LoadSymbolsMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            if (_controlCenter.State != DebuggerState.Halted)
+            {
+                MessageBox.Show("调试器必须处于暂停状态才能加载符号。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            
+            // 禁用按钮，防止重复点击
+            LoadSymbolsButton.IsEnabled = false;
+            LoadSymbolsMenuItem.IsEnabled = false;
+            
+            try
+            {
+                // 显示加载进度
+                StatusTextBlock.Text = "正在准备加载符号...";
+                
+                // 定义符号加载状态处理程序
+                Action<string> symbolStatusHandler = status => 
+                {
+                    // 确保在UI线程上更新状态
+                    Dispatcher.Invoke(() => 
+                    {
+                        StatusTextBlock.Text = status;
+                    });
+                };
+                
+                // 订阅符号加载状态事件
+                _controlCenter.OnSymbolLoadStatusChanged += symbolStatusHandler;
+                
+                try
+                {
+                    // 关键修改：将整个符号加载操作包裹在Task.Run中，在真正的后台线程执行
+                    // 这样可以避免UI线程被阻塞，同时避免异步方法被错误地同步等待
+                    var loadTask = Task.Run(async () => 
+                    {
+                        // 在后台线程中执行符号加载
+                        return await _controlCenter.LoadSymbols();
+                    });
+                    
+                    // 使用ContinueWith在操作完成后更新UI，而不是同步等待
+                    await loadTask.ContinueWith(t => 
+                    {
+                        // 这部分代码将在UI线程中执行
+                        Dispatcher.Invoke(() =>
+                        {
+                            var result = t.Result;
+                            if (result)
+                            {
+                                // 刷新反汇编视图以显示新的符号信息
+                                DisassemblyView.RefreshView();
+                                StatusTextBlock.Text = "符号加载完成";
+                            }
+                            else
+                            {
+                                StatusTextBlock.Text = "符号加载失败";
+                            }
+                            
+                            // 延迟恢复状态显示
+                            Task.Delay(1000).ContinueWith(_ => 
+                            {
+                                Dispatcher.Invoke(() => UpdateUiForState(_controlCenter.State));
+                            });
+                        });
+                    }, TaskScheduler.FromCurrentSynchronizationContext());
+                }
+                finally
+                {
+                    // 取消订阅事件
+                    _controlCenter.OnSymbolLoadStatusChanged -= symbolStatusHandler;
+                }
+            }
+            finally
+            {
+                // 重新启用按钮
+                LoadSymbolsButton.IsEnabled = true;
+                LoadSymbolsMenuItem.IsEnabled = true;
             }
         }
     }

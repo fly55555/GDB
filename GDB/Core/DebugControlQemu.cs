@@ -16,6 +16,8 @@ namespace GDB.Core
     public class DebugControlQemu : IDebugControl
     {
         public bool IsHalt { get; set; }
+        
+        public ulong KernBase { get; set; }
 
         public event EventHandler OnHaltHandler;
         public GdbClient Client { get; }

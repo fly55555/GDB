@@ -822,6 +822,29 @@ namespace GDB.UI
                 }
             }
         }
+
+        /// <summary>
+        /// 刷新当前视图
+        /// </summary>
+        public void RefreshView()
+        {
+            // 获取当前选中的地址
+            ulong currentAddress = 0;
+            if (InternalListView.SelectedItem is CommonInstruction selectedItem)
+            {
+                currentAddress = selectedItem.IP;
+            }
+            else if (_internalSource.Count > 0)
+            {
+                currentAddress = _internalSource[0].IP;
+            }
+            
+            // 如果有地址，则重新加载
+            if (currentAddress > 0)
+            {
+                GoToAddress(currentAddress);
+            }
+        }
     }
 
     public class DataRequestEventArgs : EventArgs

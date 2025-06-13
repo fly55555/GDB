@@ -19,6 +19,11 @@ namespace GDB.Core
         bool IsHalt { get; set; }
 
         /// <summary>
+        /// 内核基址
+        /// </summary>
+        ulong KernBase { get; set; }
+
+        /// <summary>
         /// 目标暂停 事件接收器
         /// </summary>
         event EventHandler OnHaltHandler;

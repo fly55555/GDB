@@ -20,6 +20,8 @@
                 <MenuItem Header="_Run" Name="RunMenuItem" Click="RunMenuItem_Click" InputGestureText="F9"/>
                 <MenuItem Header="_Break" Name="BreakMenuItem" Click="BreakMenuItem_Click"/>
                 <MenuItem Header="_Step Into" Name="StepIntoMenuItem" Click="StepIntoMenuItem_Click" InputGestureText="F7"/>
+                <Separator />
+                <MenuItem Header="_Load Symbols" Name="LoadSymbolsMenuItem" Click="LoadSymbolsMenuItem_Click"/>
             </MenuItem>
         </Menu>
 
@@ -30,6 +32,8 @@
             <Button Content="Run" Name="RunButton" Click="RunMenuItem_Click"/>
             <Button Content="Break" Name="BreakButton" Click="BreakMenuItem_Click"/>
             <Button Content="Step" Name="StepButton" Click="StepIntoMenuItem_Click"/>
+            <Separator/>
+            <Button Content="Load Symbols" Name="LoadSymbolsButton" Click="LoadSymbolsMenuItem_Click"/>
             <Separator/>
             <TextBlock Text=" Go to Address: " VerticalAlignment="Center"/>
             <TextBox Name="AddressTextBox" Width="150" VerticalContentAlignment="Center"/>
