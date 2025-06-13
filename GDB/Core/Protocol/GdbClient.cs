@@ -41,20 +41,11 @@ namespace GDB.Core.Protocol
         private readonly byte[] _receiveBuffer = new byte[4096];
         private readonly StringBuilder _processingBuffer = new StringBuilder();
 
-        // 日志记录器
-        private readonly List<string> _logs = new List<string>();
-        private const int MAX_LOG_ENTRIES = 1000;
-        
-        // 是否启用详细日志
-        public bool EnableVerboseLogging { get; set; } = true;
-
         // 中断和停止事件
         public event Action<GdbPacket> OnStopReceived;
         public event Action OnResumed;
         
-        // 日志记录事件
-        public event Action<string> OnLogMessage;
-        
+
         // 定义不同类型命令的响应特征
         private static readonly Dictionary<string, string[]> CommandResponsePrefixes = new Dictionary<string, string[]>
         {
@@ -78,64 +69,20 @@ namespace GDB.Core.Protocol
             _tcpClient = new TcpClient();
         }
 
-        // 记录日志
-        private void LogMessage(string message, bool isError = false)
-        {
-            return;
-            string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
-            string formattedMessage = $"[{timestamp}] {(isError ? "[ERROR] " : "")}GdbClient: {message}";
-            
-            lock (_logs)
-            {
-                _logs.Add(formattedMessage);
-                while (_logs.Count > MAX_LOG_ENTRIES)
-                {
-                    _logs.RemoveAt(0);
-                }
-            }
-            
-            OnLogMessage?.Invoke(formattedMessage);
-            
-            // 使用System.Diagnostics.Debug或Trace输出到VS输出窗口
-            System.Diagnostics.Debug.WriteLine(formattedMessage);
-        }
-
-        // 获取所有日志
-        public List<string> GetLogs()
-        {
-            lock (_logs)
-            {
-                return new List<string>(_logs);
-            }
-        }
-
-        // 清除日志
-        public void ClearLogs()
-        {
-            lock (_logs)
-            {
-                _logs.Clear();
-            }
-        }
-
         public async Task ConnectAsync(string host, int port, CancellationToken cancellationToken = default)
         {
-            LogMessage($"正在连接到 {host}:{port}...");
             _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             await _tcpClient.ConnectAsync(host, port);
             _stream = _tcpClient.GetStream();
-            LogMessage($"已连接到 {host}:{port}");
             
             _ = Task.Run(() => ReceiveLoop(_cancellationTokenSource.Token));
 
             // Query the target's status to get the initial halt reason.
-            LogMessage("发送初始状态查询...");
             await SendPacketAsync(new GdbPacket("?"), cancellationToken);
         }
 
         private async Task ReceiveLoop(CancellationToken token)
         {
-            LogMessage("接收循环已启动");
             while (!token.IsCancellationRequested && IsConnected)
             {
                 try
@@ -143,44 +90,29 @@ namespace GDB.Core.Protocol
                     int bytesRead = await _stream.ReadAsync(_receiveBuffer, 0, _receiveBuffer.Length, token);
                     if (bytesRead == 0)
                     {
-                        LogMessage("连接已关闭（读取0字节）", true);
                         break;
                     }
 
                     string receivedData = Encoding.ASCII.GetString(_receiveBuffer, 0, bytesRead);
-                    if (EnableVerboseLogging)
-                    {
-                        LogMessage($"接收原始数据: {ByteArrayToHexString(_receiveBuffer, 0, bytesRead)} (ASCII: {EscapeNonPrintable(receivedData)})");
-                    }
-
                     _processingBuffer.Append(receivedData);
                     await ProcessBuffer();
                 }
                 catch (OperationCanceledException) 
                 { 
-                    LogMessage("接收循环已取消");
                     break; 
                 }
                 catch (IOException ex) 
                 { 
-                    LogMessage($"IO异常: {ex.Message}", true);
                     break; 
                 }
                 catch (Exception ex) 
                 { 
-                    LogMessage($"接收循环异常: {ex.Message}", true);
                 }
             }
-            LogMessage("接收循环已退出");
         }
 
         private async Task ProcessBuffer()
         {
-            if (EnableVerboseLogging)
-            {
-                LogMessage($"处理缓冲区, 当前长度: {_processingBuffer.Length}, 内容: {EscapeNonPrintable(_processingBuffer.ToString())}");
-            }
-
             // 存储此次处理过程中提取的所有数据包，用于检测重复
             var processedPacketsInThisRound = new HashSet<string>();
 
@@ -189,10 +121,6 @@ namespace GDB.Core.Protocol
                 // 处理ACK信号
                 if (_processingBuffer[0] == '+')
                 {
-                    if (EnableVerboseLogging)
-                    {
-                        LogMessage("接收到ACK信号(+)");
-                    }
                     _processingBuffer.Remove(0, 1);
                     
                     // 检查是否有待处理的继续执行或单步命令
@@ -209,7 +137,6 @@ namespace GDB.Core.Protocol
                             TaskCompletionSource<GdbPacket> tcs;
                             if (_pendingCommands.TryRemove(commandId, out tcs))
                             {
-                                LogMessage($"接收到ACK信号，完成命令 {commandId}");
                                 tcs.TrySetResult(new GdbPacket("OK"));
                                 OnResumed?.Invoke();
                             }
@@ -222,7 +149,6 @@ namespace GDB.Core.Protocol
                 // 处理NACK信号
                 if (_processingBuffer[0] == '-')
                 {
-                    LogMessage("接收到NACK信号(-)，需要重传");
                     _processingBuffer.Remove(0, 1);
                     // 这里应该重新发送上一个包，但目前实现中未保留这个信息
                     // TODO: 实现包重传机制
@@ -233,11 +159,6 @@ namespace GDB.Core.Protocol
                 int startIndex = _processingBuffer.ToString().IndexOf('$');
                 if (startIndex == -1)
                 {
-                    // 没有找到开始标记，清空缓冲区
-                    if (EnableVerboseLogging)
-                    {
-                        LogMessage($"缓冲区中未找到起始符号($)，丢弃缓冲区: {EscapeNonPrintable(_processingBuffer.ToString())}");
-                    }
                     _processingBuffer.Clear();
                     return;
                 }
@@ -245,10 +166,6 @@ namespace GDB.Core.Protocol
                 // 移除开始标记前的所有数据
                 if (startIndex > 0)
                 {
-                    if (EnableVerboseLogging)
-                    {
-                        LogMessage($"丢弃起始符号前的数据: {EscapeNonPrintable(_processingBuffer.ToString(0, startIndex))}");
-                    }
                     _processingBuffer.Remove(0, startIndex);
                 }
 
@@ -257,10 +174,6 @@ namespace GDB.Core.Protocol
                 if (endIndex == -1 || _processingBuffer.Length < endIndex + 3)
                 {
                     // 数据包不完整，等待更多数据
-                    if (EnableVerboseLogging)
-                    {
-                        LogMessage("数据包不完整，等待更多数据");
-                    }
                     return;
                 }
 
@@ -271,14 +184,11 @@ namespace GDB.Core.Protocol
                 // 检查是否是当前处理循环中的重复包
                 if (processedPacketsInThisRound.Contains(rawPacket))
                 {
-                    LogMessage($"跳过重复数据包: {rawPacket}");
                     continue;
                 }
                 
                 // 将包添加到已处理集合
                 processedPacketsInThisRound.Add(rawPacket);
-
-                LogMessage($"提取完整数据包: {rawPacket}");
 
                 // 处理完整的数据包
                 await HandleFullPacket(rawPacket);
@@ -290,15 +200,9 @@ namespace GDB.Core.Protocol
             try
             {
                 var packet = GdbPacket.Deserialize(rawPacket);
-                LogMessage($"解析数据包: {rawPacket} -> 数据: {packet.Data}, 校验和: {packet.Checksum:X2}");
                 
                 // 发送ACK确认
                 await _stream.WriteAsync(new byte[] { (byte)'+' }, 0, 1, _cancellationTokenSource.Token);
-                if (EnableVerboseLogging)
-                {
-                    LogMessage("发送ACK确认(+)");
-                }
-
                 // 将处理过的数据包加入队列（用于调试）
                 _processedPackets.Enqueue(packet);
                 while (_processedPackets.Count > MAX_PROCESSED_PACKETS && _processedPackets.TryDequeue(out _)) { }
@@ -306,7 +210,6 @@ namespace GDB.Core.Protocol
                 // 检查是否是停止通知（优先处理中断包）
                 if (packet.Data.StartsWith("S") || packet.Data.StartsWith("T"))
                 {
-                    LogMessage($"接收到停止通知: {packet.Data}");
                     OnStopReceived?.Invoke(packet);
                     return;
                 }
@@ -314,7 +217,6 @@ namespace GDB.Core.Protocol
                 // 如果没有待处理的命令，直接丢弃响应
                 if (_pendingCommands.Count == 0)
                 {
-                    LogMessage($"没有待处理的命令，丢弃响应: {packet.Data}", true);
                     return;
                 }
 
@@ -335,7 +237,6 @@ namespace GDB.Core.Protocol
                 // 检查是否是qRcmd命令的"O"输出数据
                 else if (packet.Data.StartsWith("O") && TryFindQRcmdCommand())
                 {
-                    LogMessage("检测到qRcmd命令的O输出数据");
                     if (HandleQRcmdOutput(packet))
                     {
                         return; // 已处理，不需要继续
@@ -354,7 +255,6 @@ namespace GDB.Core.Protocol
                         TaskCompletionSource<GdbPacket> tcs;
                         if (_pendingCommands.TryRemove(commandId, out tcs))
                         {
-                            LogMessage($"已匹配命令 ID {commandId} 的响应: {packet.Data}");
                             tcs.TrySetResult(packet);
                             matched = true;
                             break;
@@ -372,23 +272,13 @@ namespace GDB.Core.Protocol
                         TaskCompletionSource<GdbPacket> tcs;
                         if (_pendingCommands.TryRemove(oldestCommand, out tcs))
                         {
-                            LogMessage($"未能精确匹配，将响应 {packet.Data} 分配给最早的命令 {oldestCommand}");
                             tcs.TrySetResult(packet);
                         }
                     }
-                    else
-                    {
-                        LogMessage($"未匹配任何命令，丢弃响应: {packet.Data}", true);
-                    }
-                }
-                else if (!matched)
-                {
-                    LogMessage($"未匹配任何命令，丢弃响应: {packet.Data}", true);
                 }
             }
             catch (Exception ex) 
             { 
-                LogMessage($"处理数据包异常: {ex.Message}", true); 
             }
         }
 
@@ -405,7 +295,6 @@ namespace GDB.Core.Protocol
             {
                 if (_pendingCommands.TryRemove(commandKvp.Key, out var tcs))
                 {
-                    LogMessage($"继续或单步命令 '{commandKvp.Key}' 已被确认为 'OK'.");
                     tcs.TrySetResult(new GdbPacket("OK"));
                     OnResumed?.Invoke();
                     return true;
@@ -434,13 +323,11 @@ namespace GDB.Core.Protocol
             // 验证是否是O开头但不是OK的数据包
             if (packet.Data == "OK")
             {
-                LogMessage("这是OK数据包，应由HandleQRcmdCompletion处理");
                 return false;
             }
             
             if (!packet.Data.StartsWith("O"))
             {
-                LogMessage($"这不是输出数据包: {packet.Data}");
                 return false;
             }
             
@@ -452,7 +339,6 @@ namespace GDB.Core.Protocol
                 
             if (qRcmdCommands.Count == 0)
             {
-                LogMessage("未找到等待响应的qRcmd命令，无法处理输出数据");
                 return false;
             }
             
@@ -466,20 +352,16 @@ namespace GDB.Core.Protocol
             // 检查是否已经存在相同的输出，避免重复添加
             if (outputBuffer.ToString().Contains(packet.Data))
             {
-                LogMessage($"命令 {commandId} 已存在相同输出，跳过: {packet.Data}");
                 return true;
             }
             
             outputBuffer.Append(packet.Data);
-            LogMessage($"为命令 {commandId} 添加输出: {packet.Data}");
             return true;
         }
 
         // 处理qRcmd命令的完成信号
         private bool HandleQRcmdCompletion(GdbPacket packet)
         {
-            LogMessage("尝试处理qRcmd命令完成信号");
-            
             // 查找正在等待响应的qRcmd命令
             var qRcmdCommands = _pendingCommands
                 .Where(kv => kv.Key.Substring(kv.Key.IndexOf(':') + 1).StartsWith("qRcmd,"))
@@ -488,7 +370,6 @@ namespace GDB.Core.Protocol
                 
             if (qRcmdCommands.Count == 0)
             {
-                LogMessage("未找到等待完成的qRcmd命令");
                 return false;
             }
             
@@ -496,15 +377,12 @@ namespace GDB.Core.Protocol
             var kvp = qRcmdCommands.First();
             string commandId = kvp.Key;
             
-            LogMessage($"找到等待完成的qRcmd命令: {commandId}");
-            
             // 获取此命令累积的输出
             StringBuilder outputBuffer;
             if (_qRcmdOutputBuffers.TryRemove(commandId, out outputBuffer))
             {
                 // 创建组合响应包
                 string combinedData = outputBuffer.ToString();
-                LogMessage($"获取到命令 {commandId} 的累积输出: {combinedData}");
                 
                 if (string.IsNullOrEmpty(combinedData))
                 {
@@ -517,30 +395,17 @@ namespace GDB.Core.Protocol
                 TaskCompletionSource<GdbPacket> tcs;
                 if (_pendingCommands.TryRemove(commandId, out tcs))
                 {
-                    LogMessage($"完成qRcmd命令 {commandId}，组合响应: {combinedData}");
                     tcs.TrySetResult(combinedPacket);
                     return true;
-                }
-                else
-                {
-                    LogMessage($"无法完成命令 {commandId}，未找到TaskCompletionSource", true);
                 }
             }
             else
             {
-                // 没有找到缓冲区，可能是第一个响应就是OK
-                LogMessage($"未找到命令 {commandId} 的输出缓冲区，直接返回OK");
-                
                 TaskCompletionSource<GdbPacket> tcs;
                 if (_pendingCommands.TryRemove(commandId, out tcs))
                 {
-                    LogMessage($"完成qRcmd命令 {commandId}，直接响应: OK");
                     tcs.TrySetResult(packet);
                     return true;
-                }
-                else
-                {
-                    LogMessage($"无法完成命令 {commandId}，未找到TaskCompletionSource", true);
                 }
             }
             
@@ -555,10 +420,6 @@ namespace GDB.Core.Protocol
             {
                 if (response.StartsWith(errorPrefix))
                 {
-                    if (EnableVerboseLogging)
-                    {
-                        LogMessage($"匹配到错误响应: {response} (命令: {command})");
-                    }
                     return true;
                 }
             }
@@ -573,19 +434,9 @@ namespace GDB.Core.Protocol
                 {
                     if (string.IsNullOrEmpty(prefix) || response.StartsWith(prefix))
                     {
-                        if (EnableVerboseLogging)
-                        {
-                            LogMessage($"匹配响应: {response} 对应命令: {command} (前缀: {commandPrefix}, 响应前缀: {prefix})");
-                        }
                         return true;
                     }
                 }
-            }
-            
-            // 如果找不到匹配规则，默认接受响应
-            if (EnableVerboseLogging)
-            {
-                LogMessage($"无法确定匹配规则，默认接受响应: {response} 对应命令: {command}");
             }
             return true;
         }
@@ -610,7 +461,6 @@ namespace GDB.Core.Protocol
             {
                 // 创建命令ID
                 string commandId = $"{Interlocked.Increment(ref _commandId)}:{command}";
-                LogMessage($"发送命令 ID {commandId}");
             
                 // 创建用于等待响应的TaskCompletionSource
                 var responseTcs = new TaskCompletionSource<GdbPacket>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -620,7 +470,6 @@ namespace GDB.Core.Protocol
                 if (command.StartsWith("qRcmd,"))
                 {
                     _qRcmdOutputBuffers[commandId] = new StringBuilder();
-                    LogMessage($"初始化qRcmd命令 {commandId} 的输出缓冲区");
                 }
             
                 try
@@ -636,13 +485,11 @@ namespace GDB.Core.Protocol
                     using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds)))
                     using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token))
                     {
-                        LogMessage($"等待命令 ID {commandId} 的响应，超时时间: {timeoutSeconds}秒");
                         var completedTask = await Task.WhenAny(responseTcs.Task, Task.Delay(Timeout.Infinite, linkedCts.Token));
                     
                         if (completedTask == responseTcs.Task)
                         {
                             var response = await responseTcs.Task;
-                            LogMessage($"命令 ID {commandId} 已收到响应: {response.Data}");
                             return response;
                         }
                         else
@@ -650,7 +497,6 @@ namespace GDB.Core.Protocol
                             // 超时处理
                             _pendingCommands.TryRemove(commandId, out _);
                             _qRcmdOutputBuffers.TryRemove(commandId, out _); // 清除缓冲区
-                            LogMessage($"命令 ID {commandId} 超时", true);
                             throw new TimeoutException($"Command timed out: {command}");
                         }
                     }
@@ -660,9 +506,6 @@ namespace GDB.Core.Protocol
                     // 确保在出现异常时移除挂起的命令
                     _pendingCommands.TryRemove(commandId, out _);
                     _qRcmdOutputBuffers.TryRemove(commandId, out _); // 清除缓冲区
-                
-                    // 记录异常
-                    LogMessage($"命令 ID {commandId} 执行失败: {ex.Message}", true);
                 
                     // 重新抛出原始异常
                     throw new Exception($"Failed to execute command: {command}", ex);
@@ -678,14 +521,11 @@ namespace GDB.Core.Protocol
         public async Task SendPacketAsync(GdbPacket packet, CancellationToken cancellationToken = default)
         {
             var packetBytes = packet.Serialize();
-            string packetString = Encoding.ASCII.GetString(packetBytes);
-            LogMessage($"发送数据包: {packetString} (十六进制: {ByteArrayToHexString(packetBytes, 0, packetBytes.Length)})");
             await _stream.WriteAsync(packetBytes, 0, packetBytes.Length, cancellationToken);
         }
 
         public void Dispose()
         {
-            LogMessage("关闭GdbClient连接");
             _cancellationTokenSource?.Cancel();
             _cancellationTokenSource?.Dispose();
             _stream?.Dispose();
@@ -694,44 +534,10 @@ namespace GDB.Core.Protocol
             // 清除所有挂起的命令
             foreach (var kvp in _pendingCommands)
             {
-                LogMessage($"取消命令 ID {kvp.Key}");
                 kvp.Value.TrySetCanceled();
             }
             _pendingCommands.Clear();
             _qRcmdOutputBuffers.Clear();
-            LogMessage("GdbClient已关闭");
-        }
-
-        // 辅助方法：将字节数组转换为十六进制字符串
-        private static string ByteArrayToHexString(byte[] bytes, int offset, int count)
-        {
-            StringBuilder hex = new StringBuilder(count * 3);
-            for (int i = offset; i < offset + count; i++)
-            {
-                hex.AppendFormat("{0:X2} ", bytes[i]);
-            }
-            return hex.ToString().TrimEnd();
-        }
-
-        // 辅助方法：转义不可打印字符
-        private static string EscapeNonPrintable(string input)
-        {
-            if (string.IsNullOrEmpty(input))
-                return string.Empty;
-
-            StringBuilder sb = new StringBuilder();
-            foreach (char c in input)
-            {
-                if (c < 32 || c > 126)
-                {
-                    sb.Append($"\\x{(int)c:X2}");
-                }
-                else
-                {
-                    sb.Append(c);
-                }
-            }
-            return sb.ToString();
         }
     }
 } 
